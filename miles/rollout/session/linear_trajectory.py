@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 # TODO: hardcoded to 1 for now; if multi-step rollback is actually needed,
 #  raise this limit or make it configurable and remove the restriction.
 MAX_ASSISTANT_ROLLBACK_STEPS = 1
+
+# Canonical session_id shape (uuid4().hex); the multi-process router mints and routes by it.
+_SESSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 @dataclass
@@ -253,6 +257,19 @@ class SessionRegistry:
         session_id = uuid.uuid4().hex
         self.sessions[session_id] = LinearTrajectory()
         return session_id
+
+    def create_session_with_id(self, session_id: str) -> None:
+        """Create a session under an explicit id (used by the multi-process router).
+
+        The router mints the id and routes by it, so the owning worker must create
+        under that exact id. Validates the canonical shape and rejects collisions so
+        a routing bug surfaces loudly instead of silently clobbering a session.
+        """
+        if not _SESSION_ID_RE.match(session_id):
+            raise ValueError(f"invalid session_id shape: {session_id!r}")
+        if session_id in self.sessions:
+            raise ValueError(f"session_id already exists: {session_id}")
+        self.sessions[session_id] = LinearTrajectory()
 
     def get_session(self, session_id: str) -> LinearTrajectory:
         session = self.sessions.get(session_id)
